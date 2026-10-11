@@ -249,8 +249,26 @@ function makeQuestion(entry){
   var frames = framesOf(entry);
   if(!frames.length) return null;
   var frame = pick(frames);
-  var shown = Math.random() < 0.5 ? entry.word : pick(entry.repl);
 
+  /* 该词条的全部同义表达（原文词 + 替换词），去重 */
+  var synset = [entry.word], seenS = {};
+  seenS[entry.word.toLowerCase()] = 1;
+  for(var si=0; si<entry.repl.length; si++){
+    var r = entry.repl[si];
+    if(r.indexOf('/') >= 0) continue;
+    var rk = r.toLowerCase();
+    if(seenS[rk]) continue;
+    seenS[rk] = 1; synset.push(r);
+  }
+  if(synset.length < 2) return null;      // 没有第二个同义表达 → 无法出「同义替换」题
+
+  /* 题干显示其中一个，正确选项必须是【另一个】同义表达（不能与题干相同） */
+  var shown = pick(synset);
+  var others = synset.filter(function(x){ return x.toLowerCase() !== shown.toLowerCase(); });
+  if(!others.length) return null;
+  var answerWord = pick(others);
+
+  /* 干扰项：与本题词条不同义的词，且不能与题干/答案撞词 */
   var cands = collectDistractors(ALL.filter(function(e){ return e.family === entry.family; }), entry);
   if(cands.length < 3){
     cands = cands.concat(collectDistractors(ALL.filter(function(e){
@@ -260,7 +278,9 @@ function makeQuestion(entry){
     cands = cands.concat(collectDistractors(ALL, entry));
   }
   shuffle(cands);
-  var seen = {}; seen[shown.toLowerCase()] = 1;
+  var seen = {};
+  seen[shown.toLowerCase()] = 1;
+  seen[answerWord.toLowerCase()] = 1;
   var distractors = [];
   for(var k=0;k<cands.length && distractors.length<3;k++){
     var key = cands[k].word.toLowerCase();
@@ -272,12 +292,13 @@ function makeQuestion(entry){
   var opts = distractors.slice(0,3).map(function(c){
     return { text: c.word, sentence: plainFrame(frame, c.word), entry: c.entry, ok: false };
   });
-  opts.push({ text: shown, sentence: plainFrame(frame, shown), entry: entry, ok: true });
+  /* 正确选项 = 同义表达（文字与题干不同、含义相同） */
+  opts.push({ text: answerWord, sentence: plainFrame(frame, answerWord), entry: entry, ok: true });
   var answerIndex = opts.length - 1;
   shuffle(opts);
   for(var m2=0;m2<opts.length;m2++){ if(opts[m2].ok) answerIndex = m2; }
-  return { frame: frame, shown: shown, options: opts, answerIndex: answerIndex,
-           entry: entry, isRepl: shown !== entry.word };
+  return { frame: frame, shown: shown, correct: answerWord, options: opts,
+           answerIndex: answerIndex, entry: entry, isRepl: shown !== entry.word };
 }
 
 /* ---------------- 首页 ---------------- */
@@ -466,7 +487,7 @@ function choose(i){
     S.right++;
     if(S.kind === 'wrong') clearWrong(q.entry);   // 错题答对 → 移出错题本
   } else {
-    S.wrong.push({word: q.entry.word, mean: q.entry.mean, correct: q.shown});
+    S.wrong.push({word: q.entry.word, mean: q.entry.mean, correct: q.correct});
     markWrong(q.entry);                            // 答错 → 进错题本
   }
   save(store);
@@ -475,7 +496,10 @@ function choose(i){
   var mastered = '';
   if(S.kind === 'wrong' && ok) mastered = '<div class="note">🎉 已从错题本移除</div>';
   var ex = '<div class="exp">'
-    + '<div class="ttl">' + (ok ? '✅ 正确' : '❌ 正确答案：' + esc(q.shown)) + '</div>'
+    + '<div class="ttl">' + (ok ? '✅ 正确' : '❌ 正确答案：' + esc(q.correct)) + '</div>'
+    + '<div style="font-size:14.5px;margin:-4px 0 10px">'
+    +   '题干用词 <b>' + esc(q.shown) + '</b>　≈　正确选项 <b style="color:var(--ok)">'
+    +   esc(q.correct) + '</b></div>'
     + '<div class="tags">'
     +   '<span class="tag">' + esc(e.cat) + '</span>'
     +   '<span class="tag">' + esc(e.pos) + '</span>'
@@ -486,7 +510,8 @@ function choose(i){
     +   '<div class="k">中文释义</div><div class="v">' + esc(e.mean) + '</div>'
     +   '<div class="k">词　性</div><div class="v">' + esc(e.pos) + '</div>'
     +   '<div class="k">感情色彩</div><div class="v">' + esc(senti) + '</div>'
-    +   '<div class="k">题干关键词</div><div class="v">' + esc(q.shown) + '</div>'
+    +   '<div class="k">题干用词</div><div class="v">' + esc(q.shown) + '</div>'
+    +   '<div class="k">正确替换</div><div class="v" style="color:var(--ok)">' + esc(q.correct) + '</div>'
     +   '<div class="k">原文/常见</div><div class="v">' + esc(e.word) + '</div>'
     + '</div>'
     + '<div class="repl"><b>同义替换词：</b>' + esc(e.repl.join(' / ')) + '</div>'
@@ -536,6 +561,7 @@ function result(){
 /* ---------------- 启动 ---------------- */
 home();
 try{ window.__t = { makeQuestion: makeQuestion, modulePool: modulePool, catPool: catPool,
+                    stemOf: function(q){ return plainFrame(q.frame, q.shown); },
                     catList: catList, wrongEntries: wrongEntries, wrongCount: wrongCount,
                     markWrong: markWrong, clearWrong: clearWrong, ALL: ALL, ENTRIES: ENTRIES,
                     FRAMES: FRAMES, MODS: MODS, fillFrame: fillFrame, startModule: startModule,
